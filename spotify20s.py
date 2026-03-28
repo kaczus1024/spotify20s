@@ -16,20 +16,37 @@ if 'track_index' not in st.session_state: st.session_state.track_index = 0
 if 'tracks_queue' not in st.session_state: st.session_state.tracks_queue = []
 if 'current_target_id' not in st.session_state: st.session_state.current_target_id = None
 
-# 2. AUTORYZACJA
+# 2. AUTORYZACJA (Wersja Poprawiona dla Chmury)
 @st.cache_resource
 def get_sp():
     auth_manager = SpotifyOAuth(
-        client_id=os.getenv("SPOTIPY_CLIENT_ID"),
-        client_secret=os.getenv("SPOTIPY_CLIENT_SECRET"),
-        redirect_uri=os.getenv("SPOTIPY_REDIRECT_URI"),
+        client_id=st.secrets["SPOTIPY_CLIENT_ID"],
+        client_secret=st.secrets["SPOTIPY_CLIENT_SECRET"],
+        redirect_uri=st.secrets["SPOTIPY_REDIRECT_URI"],
         scope="user-modify-playback-state user-read-playback-state playlist-read-private playlist-read-collaborative user-library-read playlist-modify-public playlist-modify-private",
-        open_browser=False
+        open_browser=False,
+        cache_path=".spotify_cache" # Ważne dla zachowania sesji w chmurze
     )
-    return spotipy.Spotify(auth_manager=auth_manager)
+    
+    # Sprawdzamy, czy mamy już token
+    token_info = auth_manager.get_cached_token()
+    
+    if not token_info:
+        # Pobieramy URL do autoryzacji
+        auth_url = auth_manager.get_authorize_url()
+        st.link_button("🔐 Zaloguj się do Spotify", auth_url)
+        
+        # Sprawdzamy, czy wróciliśmy z kodem w adresie URL
+        query_params = st.query_params
+        if "code" in query_params:
+            auth_manager.get_access_token(query_params["code"])
+            st.success("Autoryzacja pomyślna! Odśwież stronę.")
+            st.rerun()
+        else:
+            st.info("Kliknij powyższy przycisk, aby połączyć aplikację z Twoim kontem Spotify.")
+            st.stop() # Zatrzymuje resztę kodu do czasu logowania
 
-sp = get_sp()
-user_id = sp.me()['id']
+    return spotipy.Spotify(auth_manager=auth_manager)
 
 # 3. FUNKCJE POMOCNICZE
 def clone_playlist(source_id):
