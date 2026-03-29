@@ -6,7 +6,12 @@ import time
 import random
 
 # 1. KONFIGURACJA STRONY I SESJI
-st.set_page_config(page_title="Spotify Snippets Pro", page_icon="🎵", layout="wide")
+st.set_page_config(
+    page_title="Spotify - przegląd utworów", 
+    page_icon="🎵", 
+    layout="wide",
+    initial_sidebar_state="collapsed" 
+)
 
 if 'playing' not in st.session_state: st.session_state.playing = False
 if 'track_index' not in st.session_state: st.session_state.track_index = 0
@@ -56,6 +61,15 @@ def get_artist_genres(_sp, artist_id):
         return ", ".join(artist['genres']).capitalize()
     except: return "Nieznany"
 
+# Funkcja do pobierania WSZYSTKICH utworów z playlisty (omija limit 50)
+def get_all_playlist_tracks(_sp, playlist_id):
+    results = _sp.playlist_tracks(playlist_id)
+    tracks = results['items']
+    while results['next']:
+        results = _sp.next(results)
+        tracks.extend(results['items'])
+    return tracks
+
 # 4. START APLIKACJI
 sp = get_sp()
 
@@ -92,42 +106,50 @@ if sp:
             if url_input:
                 target_id = url_input.split('/')[-1].split('?')[0]
 
-        # 6. KONTROLA ODTWARZANIA (Przyciski z podpisami)
+        # 6. KONTROLA ODTWARZANIA
         st.divider()
         c1, c2, c3, c4, c5 = st.columns(5)
 
         with c1:
-            if st.button("▶️ START", use_container_width=True):
+            # Jeśli kolejka jest pusta, przycisk ładuje nową. Jeśli nie jest, wznawia od ostatniego indeksu.
+            button_label = "▶️ WZNÓW" if (st.session_state.tracks_queue and not st.session_state.playing) else "▶️ START"
+            if st.button(button_label, use_container_width=True):
                 if target_id:
-                    res = sp.playlist_tracks(target_id)['items']
-                    valid_tracks = []
-                    for item in res:
-                        t = item.get('track') or item.get('item')
-                        if t and t.get('id'):
-                            valid_tracks.append(t)
+                    # Ładujemy nową kolejkę tylko jeśli jest pusta lub jeśli startujemy nową playlistę
+                    if not st.session_state.tracks_queue:
+                        with st.spinner('Pobieranie wszystkich utworów...'):
+                            res = get_all_playlist_tracks(sp, target_id)
+                            valid_tracks = []
+                            for item in res:
+                                t = item.get('track') or item.get('item')
+                                if t and t.get('id'):
+                                    valid_tracks.append(t)
+                            st.session_state.tracks_queue = valid_tracks
+                            if st.session_state.shuffle_mode:
+                                random.shuffle(st.session_state.tracks_queue)
+                            st.session_state.track_index = 0
                     
-                    st.session_state.tracks_queue = valid_tracks
-                    if st.session_state.shuffle_mode:
-                        random.shuffle(st.session_state.tracks_queue)
-                    st.session_state.track_index = 0
                     st.session_state.playing = True
                     st.rerun()
 
         with c2:
-            if st.button("⏮️ POPRZEDNI", use_container_width=True, disabled=not st.session_state.playing):
+            if st.button("⏮️ POPRZEDNI", use_container_width=True, disabled=not st.session_state.tracks_queue):
                 st.session_state.track_index = max(0, st.session_state.track_index - 1)
+                st.session_state.playing = True
                 st.rerun()
 
         with c3:
-            if st.button("⏭️ NASTĘPNY", use_container_width=True, disabled=not st.session_state.playing):
+            if st.button("⏭️ NASTĘPNY", use_container_width=True, disabled=not st.session_state.tracks_queue):
                 st.session_state.track_index += 1
+                st.session_state.playing = True
                 st.rerun()
 
         with c4:
-            if st.button("🔀 LOSUJ", use_container_width=True, disabled=not st.session_state.tracks_queue):
+            if st.button("🔀 NOWY MIX", use_container_width=True, disabled=not st.session_state.tracks_queue):
                 random.shuffle(st.session_state.tracks_queue)
                 st.session_state.track_index = 0
-                st.toast("Pomieszano kolejkę!")
+                st.session_state.playing = True
+                st.toast("Pomieszano całą listę!")
                 st.rerun()
 
         with c5:
@@ -137,14 +159,20 @@ if sp:
                 except: pass
                 st.rerun()
 
+        # Przycisk do całkowitego resetu (wyczyszczenia kolejki)
+        if st.session_state.tracks_queue:
+            if st.button("🧹 WYCZYŚĆ I ZAŁADUJ NOWĄ LISTĘ", use_container_width=True):
+                st.session_state.tracks_queue = []
+                st.session_state.track_index = 0
+                st.session_state.playing = False
+                st.rerun()
+
         # 7. LOGIKA ODTWARZANIA
         if st.session_state.playing and st.session_state.tracks_queue:
             idx = st.session_state.track_index
             
             if idx < len(st.session_state.tracks_queue):
                 track = st.session_state.tracks_queue[idx]
-                
-                # Pobranie roku wydania
                 release_year = track['album'].get('release_date', '????')[:4]
                 
                 col_img, col_info = st.columns([1, 2])
@@ -164,21 +192,23 @@ if sp:
                 try:
                     sp.start_playback(device_id=active_id, uris=[track['uri']], position_ms=45000)
                     
-                    for s in range(20):
+                    # Czas trwania snippetu (30s)
+                    for s in range(30):
                         if not st.session_state.playing: break
                         time.sleep(1)
-                        prog_bar.progress((s + 1) / 20, text=f"Snippet: {s+1}s / 20s")
+                        prog_bar.progress((s + 1) / 30, text=f"Snippet: {s+1}s / 30s")
                     
                     if st.session_state.playing:
                         st.session_state.track_index += 1
                         st.rerun()
 
                 except Exception as play_error:
-                    st.error(f"Błąd odtwarzania. Upewnij się, że Spotify gra w tle.")
+                    st.error("Upewnij se, że Spotify jest aktywne na wybranym urządzeniu.")
                     st.session_state.playing = False
             else:
                 st.success("Koniec playlisty!")
                 st.session_state.playing = False
+                st.session_state.tracks_queue = [] # Reset po zakończeniu
 
     except Exception as e:
         st.error(f"Błąd: {e}")
